@@ -1,0 +1,60 @@
+module Main
+
+import Std.Dynamic (Decode, string, int)
+
+import Std.IO (console)
+import SagaPgo (
+  default_config,
+  connect,
+  execute,
+  execute_,
+  text,
+  int_value,
+  Config,
+  Returned,
+  QueryError
+)
+
+main () = {
+  let config =
+    { default_config "mydb" |
+      user: "postgres",
+      password: "postgres",
+      port: 5432,
+    }
+
+  let db = connect config
+
+  {
+    # Create a table
+    let _ =
+      execute_ "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT, age INT)" []
+
+    # Insert a row
+    let _ =
+      execute_ "INSERT INTO users (name, age) VALUES ($1, $2)" [
+        text "Alice",
+        int_value 30,
+      ]
+
+    # Query it back
+    let result = execute "SELECT name, age FROM users WHERE name = $1" [
+      text "Alice",
+    ] (fun () -> {
+      let name = Decode.decode_field! "name" string
+      let age = Decode.decode_field! "age" int
+      (name, age)
+    })
+
+    case result {
+      Ok returned -> {
+        println $"Got {List.length returned.rows} rows"
+        case returned.rows {
+          (name, age) :: _ -> println $"{name} is {show age}"
+          [] -> println "no rows"
+        }
+      }
+      Err _ -> println "query failed"
+    }
+  }
+} with {db, console}

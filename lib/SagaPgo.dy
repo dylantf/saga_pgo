@@ -1,0 +1,129 @@
+module SagaPgo
+
+import Std.Dynamic
+import Std.Dynamic (Dynamic, Decode, DecodeError, from_erlang, string, int, float, bool)
+
+# --- Connection config ---
+
+pub record Config {
+  host: String,
+  port: Int,
+  database: String,
+  user: String,
+  password: String,
+  pool_size: Int,
+  ssl: Bool,
+}
+
+pub fun default_config : String -> Config
+default_config name = Config {
+  host: "localhost",
+  port: 5432,
+  database: name,
+  user: "postgres",
+  password: "",
+  pool_size: 10,
+  ssl: False,
+}
+
+# --- Connection pool (opaque handle) ---
+
+opaque type Connection = Connection Dynamic
+
+# --- Query errors ---
+
+pub type QueryError =
+  | ConstraintViolated (String, String, String)
+  | PostgresqlError (String, String, String)
+  | UnexpectedArgumentCount (Int, Int)
+  | UnexpectedArgumentType (String, String)
+  | UnexpectedResultType String
+  | QueryTimeout
+  | ConnectionUnavailable
+
+# --- Query result ---
+
+pub record Returned a {
+  count: Int,
+  rows: List a,
+}
+
+# --- Parameter values ---
+
+opaque type Value = Value Dynamic
+
+pub fun null : Unit -> Value
+null () = coerce_value ()
+
+pub fun int_value : Int -> Value
+int_value n = coerce_value n
+
+pub fun float_value : Float -> Value
+float_value f = coerce_value f
+
+pub fun text : String -> Value
+text s = coerce_value s
+
+pub fun bool_value : Bool -> Value
+bool_value b = coerce_value b
+
+@external("erlang", "saga_pgo_bridge", "coerce")
+fun coerce_value : a -> Value
+
+# --- Core effect ---
+
+effect Postgres {
+  fun raw_execute : String -> List Value -> Result (Returned Dynamic) QueryError
+}
+
+# --- Convenience wrappers ---
+
+#@ Execute a query with parameters, decode each row with the given decoder.
+pub fun execute : String -> List Value -> (Unit -> a needs {Decode}) -> Result (Returned a) QueryError
+  needs {Postgres}
+execute sql params decoder = {
+  case raw_execute! sql params {
+    Ok(returned) -> {
+      let decoded = List.flat_map (fun row -> {
+        case Dynamic.run row decoder {
+          Ok(v) -> [v]
+          Err(_) -> []
+        }
+      }) returned.rows
+      Ok(Returned { count: returned.count, rows: decoded })
+    }
+    Err(e) -> Err(e)
+  }
+}
+
+#@ Execute a statement with no return rows.
+pub fun execute_ : String -> List Value -> Result Int QueryError
+  needs {Postgres}
+execute_ sql params = {
+  case raw_execute! sql params {
+    Ok(returned) -> Ok(returned.count)
+    Err(e) -> Err(e)
+  }
+}
+
+# --- Handler ---
+
+#@ Start a connection pool and provide the Postgres handler.
+pub fun connect : Config -> Handler Postgres
+connect config = {
+  let pool = start_pool config
+  handler for Postgres {
+    raw_execute sql params = {
+      let result = bridge_query pool sql params
+      resume result
+    }
+  }
+}
+
+# --- FFI (bridge) ---
+
+@external("erlang", "saga_pgo_bridge", "start_pool")
+fun start_pool : Config -> Connection
+
+@external("erlang", "saga_pgo_bridge", "query")
+fun bridge_query : Connection -> String -> List Value -> Result (Returned Dynamic) QueryError

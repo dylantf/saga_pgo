@@ -1,0 +1,12 @@
+[project]
+name = "saga_pgo"
+
+[bin]
+main = "src/Main.dy"
+
+[library]
+module = "SagaPgo"
+expose = ["SagaPgo"]
+
+[deps]
+pgo = { version = "0.20.0" }
