@@ -1,11 +1,12 @@
 -module(saga_pgo_bridge).
 
--export([start_pool/1, query/4, coerce/1]).
+-export([start_pool/1, query/3, coerce/1]).
 
 coerce(Value) ->
     Value.
 
 start_pool({sagapgo_Config, Host, Port, Database, User, Password, PoolSize, Ssl}) ->
+    application:ensure_all_started(pgo),
     PoolName = binary_to_atom(Database, utf8),
     Options = #{
         host => binary_to_list(Host),
@@ -23,7 +24,7 @@ start_pool({sagapgo_Config, Host, Port, Database, User, Password, PoolSize, Ssl}
             erlang:error({pgo_start_failed, Reason})
     end.
 
-query({sagapgo_Connection, Pool}, Sql, Params, _Decoder) ->
+query({sagapgo_Connection, Pool}, Sql, Params) ->
     Options = #{pool => Pool},
     case pgo:query(Sql, Params, Options) of
         #{rows := Rows, num_rows := NumRows} ->

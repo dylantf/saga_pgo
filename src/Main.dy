@@ -25,36 +25,31 @@ main () = {
 
   let db = connect config
 
-  {
-    # Create a table
-    let _ =
-      execute_ "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT, age INT)" []
+  let _ =
+    execute_ "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT, age INT)" []
 
-    # Insert a row
-    let _ =
-      execute_ "INSERT INTO users (name, age) VALUES ($1, $2)" [
-        text "Alice",
-        int_value 30,
-      ]
-
-    # Query it back
-    let result = execute "SELECT name, age FROM users WHERE name = $1" [
+  let _ =
+    execute_ "INSERT INTO users (name, age) VALUES ($1, $2)" [
       text "Alice",
-    ] (fun () -> {
-      let name = Decode.decode_field! "name" string
-      let age = Decode.decode_field! "age" int
-      (name, age)
-    })
+      int_value 30,
+    ]
 
-    case result {
-      Ok returned -> {
-        println $"Got {List.length returned.rows} rows"
-        case returned.rows {
-          (name, age) :: _ -> println $"{name} is {show age}"
-          [] -> println "no rows"
-        }
+  let result = execute "SELECT name, age FROM users WHERE name = $1" [
+    text "Alice",
+  ] (fun () -> {
+    let name = Decode.decode_element! 0 string
+    let age = Decode.decode_element! 1 int
+    (name, age)
+  })
+
+  case result {
+    Ok returned -> {
+      println $"Got {List.length returned.rows} rows"
+      case returned.rows {
+        (name, age) :: _ -> println $"{name} is {show age}"
+        [] -> println "no rows"
       }
-      Err _ -> println "query failed"
     }
+    Err _ -> println "query failed"
   }
 } with {db, console}
