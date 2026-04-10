@@ -1,12 +1,13 @@
 -module(saga_pgo_bridge).
 
--export([start_pool/1, query/3, coerce/1, decode_naive_datetime/1]).
+-export([start_pool/1, query/3, coerce/1, decode_naive_datetime/1, decode_uuid/1, parse_uuid/1]).
 
 coerce(Value) ->
     Value.
 
 start_pool({sagapgo_Config, Host, Port, Database, User, Password, PoolSize, Ssl}) ->
     application:set_env(pg_types, timestamp_config, integer_system_time_microseconds),
+    application:set_env(pg_types, uuid_format, string),
     application:ensure_all_started(pgo),
     PoolName = binary_to_atom(Database, utf8),
     Options = #{
@@ -94,3 +95,28 @@ classify(V) when is_list(V) -> <<"List">>;
 classify(V) when is_tuple(V) -> <<"Tuple">>;
 classify(V) when is_map(V) -> <<"Map">>;
 classify(_) -> <<"Unknown">>.
+
+%% Postgres UUID decoder. With uuid_format=string set, pgo gives us a 36-byte
+%% binary in canonical form (lowercase hex with hyphens). We trust postgres'
+%% stored value and just wrap it.
+decode_uuid(V) when is_binary(V), byte_size(V) =:= 36 ->
+    {ok, {sagapgo_Uuid, V}};
+decode_uuid(V) when is_binary(V) ->
+    {error, {std_dynamic_DecodeError, <<"Uuid">>, <<"String of wrong length">>, []}};
+decode_uuid(Other) ->
+    {error, {std_dynamic_DecodeError, <<"Uuid">>, classify(Other), []}}.
+
+%% Validate a user-supplied UUID string. Accepts canonical hyphenated form.
+parse_uuid(<<A:8/binary, "-", B:4/binary, "-", C:4/binary, "-", D:4/binary, "-", E:12/binary>>) ->
+    case all_hex(A) andalso all_hex(B) andalso all_hex(C) andalso all_hex(D) andalso all_hex(E) of
+        true -> {ok, <<A/binary, "-", B/binary, "-", C/binary, "-", D/binary, "-", E/binary>>};
+        false -> {error, <<"invalid UUID: non-hex character">>}
+    end;
+parse_uuid(_) ->
+    {error, <<"invalid UUID: expected 36-char hyphenated form">>}.
+
+all_hex(<<>>) -> true;
+all_hex(<<C, Rest/binary>>) when C >= $0, C =< $9 -> all_hex(Rest);
+all_hex(<<C, Rest/binary>>) when C >= $a, C =< $f -> all_hex(Rest);
+all_hex(<<C, Rest/binary>>) when C >= $A, C =< $F -> all_hex(Rest);
+all_hex(_) -> false.

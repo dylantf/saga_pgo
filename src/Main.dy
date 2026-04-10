@@ -13,6 +13,8 @@ import SagaPgo (
   text,
   int_value,
   naive_datetime,
+  uuid,
+  Uuid,
   Config,
   Returned,
   QueryError
@@ -28,30 +30,31 @@ main () = {
 
   let db = connect config
 
-  # let _ =
-  #   execute_ "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
+  let _ =
+    execute_ "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
 
-  # let _ =
-  #   execute_ "INSERT INTO users (name, age) VALUES ($1, $2)" [
-  #     text "Alice",
-  #     int_value 30,
-  #   ]
+  let _ =
+    execute_ "INSERT INTO users (name, age) VALUES ($1, $2)" [
+      text "Alice",
+      int_value 30,
+    ]
 
-  let result = execute "SELECT name, age, created_at FROM users WHERE name = $1" [
+  let result = execute "SELECT id, name, age, created_at FROM users WHERE name = $1" [
     text "Alice",
   ] (fun () -> {
-    let name = Decode.decode_element! 0 string
-    let age = Decode.decode_element! 1 int
-    let created_at = Decode.decode_element! 2 naive_datetime
-    (name, age, created_at)
+    let id = Decode.decode_element! 0 uuid
+    let name = Decode.decode_element! 1 string
+    let age = Decode.decode_element! 2 int
+    let created_at = Decode.decode_element! 3 naive_datetime
+    (id, name, age, created_at)
   })
 
   case result {
     Ok returned -> {
       println $"Got {List.length returned.rows} rows"
       case returned.rows {
-        (name, age, created_at) :: _ ->
-          println $"{name} is {show age}, created at {format "%FT%T" created_at}"
+        (id, name, age, created_at) :: _ ->
+          println $"{show id}: {name} is {show age}, created at {format "%FT%T" created_at}"
         [] -> println "no rows"
       }
     }
