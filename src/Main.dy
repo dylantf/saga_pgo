@@ -2,19 +2,17 @@ module Main
 
 import Std.DateTime (NaiveDateTime, format)
 
-import Std.Dynamic (string, int)
+import Std.Dynamic (string, int, decode_element)
 
 import Std.IO (console)
 import SagaPgo (
   default_config,
   connect,
   execute,
-  execute_,
   text,
   int_value,
   naive_datetime,
   uuid,
-  PgRow,
   Uuid,
   Config,
   Returned,
@@ -39,28 +37,32 @@ main () = {
   let db = connect config
 
   let _ =
-    execute_ "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
+    execute "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
 
   let _ =
-    execute_ "INSERT INTO users (name, age) VALUES ($1, $2)" [
+    execute "INSERT INTO users (name, age) VALUES ($1, $2)" [
       text "Alice",
       int_value 30,
     ]
 
   let sql = "SELECT id, name, age, created_at FROM users WHERE name = $1"
-  let result = execute sql [text "Alice"] (fun () -> User {
-    id: column! uuid,
-    name: column! string,
-    age: column! int,
-    created_at: column! naive_datetime,
-  })
-
-  case result {
+  case execute sql [text "Alice"] {
     Ok returned -> {
       println $"Got {List.length returned.rows} rows"
       case returned.rows {
-        user :: _ ->
-          println $"{show user.id}: {user.name} is {show user.age}, created at {format "%FT%T" user.created_at}"
+        row :: _ -> case do {
+          Ok id <- decode_element 0 uuid row
+          Ok name <- decode_element 1 string row
+          Ok age <- decode_element 2 int row
+          Ok created_at <- decode_element 3 naive_datetime row
+          Ok (User { id: id, name: name, age: age, created_at: created_at })
+        } else {
+          Err e -> Err e
+        } {
+          Ok user ->
+            println $"{show user.id}: {user.name} is {show user.age}, created at {format "%FT%T" user.created_at}"
+          Err _ -> println "decode failed"
+        }
         [] -> println "no rows"
       }
     }

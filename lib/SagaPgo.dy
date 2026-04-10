@@ -3,43 +3,6 @@ module SagaPgo
 import Std.Dynamic (Dynamic, Decoder, DecodeError, from_erlang, string, int, float, bool)
 import Std.DateTime (NaiveDateTime)
 
-# --- Row decoding effect ---
-
-#@ Effect for decoding a single PostgreSQL row, one column at a time.
-#@ The cursor advances automatically with each `column` call, so the
-#@ user never writes positional indices — fields are decoded in source order.
-pub effect PgRow {
-  fun column : Decoder a -> a
-}
-
-# Call the underlying element-lookup bridge directly (bypasses the Decode
-# effect entirely — we can't stack PgRow on top of Dynamic.run because both
-# handlers reshape the continuation in incompatible ways).
-@external("erlang", "std_dynamic_bridge", "element_lookup")
-fun pg_element_lookup : Int -> Dynamic -> Result Dynamic DecodeError
-
-# Run a PgRow body against a row. Uses the state-passing handler pattern:
-# each arm either resumes with the decoded value (threading cursor + 1) or
-# aborts with Err on the first failure. Fail-fast per row.
-fun run_row : Dynamic -> (Unit -> a needs {PgRow}) -> Result a DecodeError
-run_row row body = {
-  let cursored = body () with {
-    column dec = fun cursor -> {
-      case pg_element_lookup cursor row {
-        Ok(dyn) -> case dec {
-          Decoder f -> case f dyn {
-            Ok(v) -> (resume v) (cursor + 1)
-            Err(e) -> Err(e)
-          }
-        }
-        Err(e) -> Err(e)
-      }
-    }
-    return value = fun _ -> Ok(value)
-  }
-  cursored 0
-}
-
 # --- Connection config ---
 
 pub record Config {
@@ -161,34 +124,14 @@ effect Postgres {
 
 # --- Convenience wrappers ---
 
-#@ Execute a query with parameters, decoding each row with `column` calls.
-#@ Columns are consumed in source order — no manual indices.
-pub fun execute : String -> List Value -> (Unit -> a needs {PgRow}) -> Result (Returned a) QueryError
+#@ Execute a SQL statement with parameters. Returns `Returned` containing the
+#@ affected row count and the raw rows as `Dynamic` terms. For statements that
+#@ don't return rows (DDL, plain INSERT/UPDATE/DELETE), discard the result
+#@ with `let _ = execute ...` or pattern-match on `returned.count`.
+#@ Rows are decoded at the call site with `Std.Dynamic.decode_element`.
+pub fun execute : String -> List Value -> Result (Returned Dynamic) QueryError
   needs {Postgres}
-execute sql params body = {
-  case raw_execute! sql params {
-    Ok(returned) -> {
-      let decoded = List.flat_map (fun row -> {
-        case run_row row body {
-          Ok(v) -> [v]
-          Err(_) -> []
-        }
-      }) returned.rows
-      Ok(Returned { count: returned.count, rows: decoded })
-    }
-    Err(e) -> Err(e)
-  }
-}
-
-#@ Execute a statement with no return rows.
-pub fun execute_ : String -> List Value -> Result Int QueryError
-  needs {Postgres}
-execute_ sql params = {
-  case raw_execute! sql params {
-    Ok(returned) -> Ok(returned.count)
-    Err(e) -> Err(e)
-  }
-}
+execute sql params = raw_execute! sql params
 
 # --- Handler ---
 
