@@ -2,7 +2,7 @@ module Main
 
 import Std.DateTime (NaiveDateTime, format)
 
-import Std.Dynamic (Decode, string, int)
+import Std.Dynamic (string, int)
 
 import Std.IO (console)
 import SagaPgo (
@@ -14,11 +14,19 @@ import SagaPgo (
   int_value,
   naive_datetime,
   uuid,
+  PgRow,
   Uuid,
   Config,
   Returned,
   QueryError
 )
+
+record User {
+  id: Uuid,
+  name: String,
+  age: Int,
+  created_at: NaiveDateTime,
+}
 
 main () = {
   let config =
@@ -39,22 +47,20 @@ main () = {
       int_value 30,
     ]
 
-  let result = execute "SELECT id, name, age, created_at FROM users WHERE name = $1" [
-    text "Alice",
-  ] (fun () -> {
-    let id = Decode.decode_element! 0 uuid
-    let name = Decode.decode_element! 1 string
-    let age = Decode.decode_element! 2 int
-    let created_at = Decode.decode_element! 3 naive_datetime
-    (id, name, age, created_at)
+  let sql = "SELECT id, name, age, created_at FROM users WHERE name = $1"
+  let result = execute sql [text "Alice"] (fun () -> User {
+    id: column! uuid,
+    name: column! string,
+    age: column! int,
+    created_at: column! naive_datetime,
   })
 
   case result {
     Ok returned -> {
       println $"Got {List.length returned.rows} rows"
       case returned.rows {
-        (id, name, age, created_at) :: _ ->
-          println $"{show id}: {name} is {show age}, created at {format "%FT%T" created_at}"
+        user :: _ ->
+          println $"{show user.id}: {user.name} is {show user.age}, created at {format "%FT%T" user.created_at}"
         [] -> println "no rows"
       }
     }

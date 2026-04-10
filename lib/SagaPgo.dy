@@ -4,6 +4,43 @@ import Std.Dynamic
 import Std.Dynamic (Dynamic, Decode, Decoder, DecodeError, from_erlang, string, int, float, bool)
 import Std.DateTime (NaiveDateTime)
 
+# --- Row decoding effect ---
+
+#@ Effect for decoding a single PostgreSQL row, one column at a time.
+#@ The cursor advances automatically with each `column` call, so the
+#@ user never writes positional indices — fields are decoded in source order.
+pub effect PgRow {
+  fun column : Decoder a -> a
+}
+
+# Call the underlying element-lookup bridge directly (bypasses the Decode
+# effect entirely — we can't stack PgRow on top of Dynamic.run because both
+# handlers reshape the continuation in incompatible ways).
+@external("erlang", "std_dynamic_bridge", "element_lookup")
+fun pg_element_lookup : Int -> Dynamic -> Result Dynamic DecodeError
+
+# Run a PgRow body against a row. Uses the state-passing handler pattern:
+# each arm either resumes with the decoded value (threading cursor + 1) or
+# aborts with Err on the first failure. Fail-fast per row.
+fun run_row : Dynamic -> (Unit -> a needs {PgRow}) -> Result a DecodeError
+run_row row body = {
+  let cursored = body () with {
+    column dec = fun cursor -> {
+      case pg_element_lookup cursor row {
+        Ok(dyn) -> case dec {
+          Decoder f _ -> case f dyn {
+            Ok(v) -> (resume v) (cursor + 1)
+            Err(e) -> Err(e)
+          }
+        }
+        Err(e) -> Err(e)
+      }
+    }
+    return value = fun _ -> Ok(value)
+  }
+  cursored 0
+}
+
 # --- Connection config ---
 
 pub record Config {
@@ -133,14 +170,15 @@ effect Postgres {
 
 # --- Convenience wrappers ---
 
-#@ Execute a query with parameters, decode each row with the given decoder.
-pub fun execute : String -> List Value -> (Unit -> a needs {Decode}) -> Result (Returned a) QueryError
+#@ Execute a query with parameters, decoding each row with `column` calls.
+#@ Columns are consumed in source order — no manual indices.
+pub fun execute : String -> List Value -> (Unit -> a needs {PgRow}) -> Result (Returned a) QueryError
   needs {Postgres}
-execute sql params decoder = {
+execute sql params body = {
   case raw_execute! sql params {
     Ok(returned) -> {
       let decoded = List.flat_map (fun row -> {
-        case Dynamic.run row decoder {
+        case run_row row body {
           Ok(v) -> [v]
           Err(_) -> []
         }
