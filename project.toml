@@ -2,7 +2,7 @@
 name = "saga_pgo"
 
 [bin]
-main = "src/Main.dy"
+main = "src/Main.saga"
 
 [library]
 module = "SagaPgo"
