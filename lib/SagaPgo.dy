@@ -1,7 +1,6 @@
 module SagaPgo
 
-import Std.Dynamic
-import Std.Dynamic (Dynamic, Decode, Decoder, DecodeError, from_erlang, string, int, float, bool)
+import Std.Dynamic (Dynamic, Decoder, DecodeError, from_erlang, string, int, float, bool)
 import Std.DateTime (NaiveDateTime)
 
 # --- Row decoding effect ---
@@ -28,7 +27,7 @@ run_row row body = {
     column dec = fun cursor -> {
       case pg_element_lookup cursor row {
         Ok(dyn) -> case dec {
-          Decoder f _ -> case f dyn {
+          Decoder f -> case f dyn {
             Ok(v) -> (resume v) (cursor + 1)
             Err(e) -> Err(e)
           }
@@ -115,15 +114,7 @@ fun decode_naive_datetime_raw : Dynamic -> Result NaiveDateTime DecodeError
 
 #@ Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
 #@ Both are decoded to a NaiveDateTime in UTC.
-pub val naive_datetime = Decoder decode_naive_datetime_raw (NaiveDateTime {
-  year: 1970,
-  month: 1,
-  day: 1,
-  hour: 0,
-  minute: 0,
-  second: 0,
-  microsecond: 0,
-})
+pub val naive_datetime = Decoder decode_naive_datetime_raw
 
 #@ A Postgres UUID. Internally a 36-character canonical hyphenated string.
 pub opaque type Uuid = Uuid String
@@ -154,7 +145,7 @@ uuid_value u = case u {
 fun decode_uuid_raw : Dynamic -> Result Uuid DecodeError
 
 #@ Decoder for Postgres UUID columns.
-pub val uuid = Decoder decode_uuid_raw (Uuid "00000000-0000-0000-0000-000000000000")
+pub val uuid = Decoder decode_uuid_raw
 
 impl Show for Uuid {
   show u = case u {
