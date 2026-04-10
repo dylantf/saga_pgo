@@ -1,7 +1,8 @@
 module SagaPgo
 
 import Std.Dynamic
-import Std.Dynamic (Dynamic, Decode, DecodeError, from_erlang, string, int, float, bool)
+import Std.Dynamic (Dynamic, Decode, Decoder, DecodeError, from_erlang, string, int, float, bool)
+import Std.DateTime (NaiveDateTime)
 
 # --- Connection config ---
 
@@ -69,6 +70,23 @@ bool_value b = coerce_value b
 
 @external("erlang", "saga_pgo_bridge", "coerce")
 fun coerce_value : a -> Value
+
+# --- Postgres-specific decoders ---
+
+@external("erlang", "saga_pgo_bridge", "decode_naive_datetime")
+fun decode_naive_datetime_raw : Dynamic -> Result NaiveDateTime DecodeError
+
+#@ Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
+#@ Both are decoded to a NaiveDateTime in UTC.
+pub val naive_datetime = Decoder decode_naive_datetime_raw (NaiveDateTime {
+  year: 1970,
+  month: 1,
+  day: 1,
+  hour: 0,
+  minute: 0,
+  second: 0,
+  microsecond: 0,
+})
 
 # --- Core effect ---
 

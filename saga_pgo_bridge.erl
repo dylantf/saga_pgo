@@ -1,11 +1,12 @@
 -module(saga_pgo_bridge).
 
--export([start_pool/1, query/3, coerce/1]).
+-export([start_pool/1, query/3, coerce/1, decode_naive_datetime/1]).
 
 coerce(Value) ->
     Value.
 
 start_pool({sagapgo_Config, Host, Port, Database, User, Password, PoolSize, Ssl}) ->
+    application:set_env(pg_types, timestamp_config, integer_system_time_microseconds),
     application:ensure_all_started(pgo),
     PoolName = binary_to_atom(Database, utf8),
     Options = #{
@@ -56,3 +57,40 @@ convert_error(closed) ->
     {sagapgo_QueryTimeout};
 convert_error(Other) ->
     {sagapgo_PostgresqlError, <<"unknown">>, <<"unknown">>, list_to_binary(io_lib:format("~p", [Other]))}.
+
+%% Postgres TIMESTAMP / TIMESTAMPTZ decoder.
+%%
+%% Two shapes are accepted because the underlying pg_types library handles
+%% the two postgres types differently:
+%%
+%%   - TIMESTAMP (oid 1114) honors `application:get_env(pg_types, timestamp_config)`,
+%%     which we set to `integer_system_time_microseconds` in start_pool. With
+%%     that config, values arrive as int64 microseconds since the Unix epoch.
+%%
+%%   - TIMESTAMPTZ (oid 1184) is hardcoded in pg_timestampz.erl to always
+%%     decode with config `[]`, ignoring the env setting entirely. Values
+%%     always arrive as `{{Y,M,D},{H,M,S}}` tuples where the seconds field
+%%     is integer if microseconds == 0, otherwise float.
+decode_naive_datetime(Microseconds) when is_integer(Microseconds) ->
+    Seconds = Microseconds div 1000000,
+    Us = Microseconds rem 1000000,
+    {{Y, Mo, D}, {H, Mi, S}} = calendar:system_time_to_universal_time(Seconds, second),
+    {ok, {std_datetime_NaiveDateTime, Y, Mo, D, H, Mi, S, Us}};
+decode_naive_datetime({{Y, Mo, D}, {H, Mi, S}}) when is_integer(S) ->
+    {ok, {std_datetime_NaiveDateTime, Y, Mo, D, H, Mi, S, 0}};
+decode_naive_datetime({{Y, Mo, D}, {H, Mi, S}}) when is_float(S) ->
+    IntS = trunc(S),
+    Us = trunc((S - IntS) * 1000000),
+    {ok, {std_datetime_NaiveDateTime, Y, Mo, D, H, Mi, IntS, Us}};
+decode_naive_datetime(Other) ->
+    Found = classify(Other),
+    {error, {std_dynamic_DecodeError, <<"NaiveDateTime">>, Found, []}}.
+
+classify(V) when is_binary(V) -> <<"String">>;
+classify(V) when is_integer(V) -> <<"Int">>;
+classify(V) when is_float(V) -> <<"Float">>;
+classify(V) when is_atom(V) -> <<"Atom">>;
+classify(V) when is_list(V) -> <<"List">>;
+classify(V) when is_tuple(V) -> <<"Tuple">>;
+classify(V) when is_map(V) -> <<"Map">>;
+classify(_) -> <<"Unknown">>.
