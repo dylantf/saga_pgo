@@ -43,11 +43,11 @@ opaque type Connection = Connection Dynamic
 # --- Query errors ---
 
 pub type QueryError =
-  | ConstraintViolated (String, String, String)
-  | PostgresqlError (String, String, String)
-  | UnexpectedArgumentCount (Int, Int)
-  | UnexpectedArgumentType (String, String)
-  | UnexpectedResultType String
+  | ConstraintViolated (message: String) (constraint: String) (detail: String)
+  | PostgresqlError (code: String) (severity: String) (message: String)
+  | UnexpectedArgumentCount (expected: Int) (got: Int)
+  | UnexpectedArgumentType (expected: String) (got: String)
+  | UnexpectedResultType (expected: String)
   | QueryTimeout
   | ConnectionUnavailable
   deriving (Debug)

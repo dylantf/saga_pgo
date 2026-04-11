@@ -45,25 +45,28 @@ main () = {
       port: 5432,
     }
 
-  let conn = connect config
-
-  let _ =
-    query conn "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
-
-  let _ =
-    sql "INSERT INTO users (name, age) VALUES ($1, $2)"
-    |> bind_values [text "Alice", int_value 30]
-    |> execute conn
-
-  # Bulk insert with the query builder. `push_values` handles parens, commas,
-  # and $N numbering; `returning id` is just appended after.
   let new_users = [
     NewUser { name: "Bob", age: 25 },
     NewUser { name: "Carol", age: 28 },
     NewUser { name: "Dave", age: 35 },
   ]
 
-  # Run the bulk insert inside a transaction so it commits or rolls back atomically
+  let conn = connect config
+
+  let _ =
+    query conn "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
+
+  let _ =
+    query conn "INSERT INTO users (name, age) VALUES ($1, $2)" [
+      text "Alice",
+      int_value 30,
+    ]
+
+  let _ =
+    sql "INSERT INTO users (name, age) VALUES ($1, $2)"
+    |> bind_values [text "Alice", int_value 30]
+    |> execute conn
+
   let bulk_result = transaction conn (fun () -> {
     sql "INSERT INTO users (name, age)"
     |> push_values new_users (fun u -> [text u.name, int_value u.age])
