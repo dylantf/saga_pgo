@@ -1,7 +1,17 @@
 module SagaPgo
 
-import Std.Dynamic (Dynamic, Decoder, DecodeError, from_erlang, string, int, float, bool)
 import Std.DateTime (Date, NaiveDateTime)
+
+import Std.Dynamic (
+  Dynamic,
+  Decoder,
+  DecodeError,
+  from_erlang,
+  string,
+  int,
+  float,
+  bool
+)
 
 # --- Connection config ---
 
@@ -100,7 +110,7 @@ pub fun date_value : Date -> Value
 date_value d = encode_date_raw d
 
 #@ A Postgres UUID. Internally a 36-character canonical hyphenated string.
-pub opaque type Uuid = Uuid String
+opaque type Uuid = Uuid String
 
 #@ Convert a Uuid to its canonical hyphenated string form.
 pub fun uuid_to_string : Uuid -> String
@@ -114,8 +124,8 @@ fun parse_uuid_raw : String -> Result String String
 #@ Parse a string into a Uuid. Accepts canonical hyphenated form.
 pub fun uuid_from_string : String -> Result Uuid String
 uuid_from_string s = case parse_uuid_raw s {
-  Ok(v) -> Ok(Uuid v)
-  Err(e) -> Err(e)
+  Ok v -> Ok (Uuid v)
+  Err e -> Err e
 }
 
 #@ Encode a Uuid as a query parameter.
@@ -136,10 +146,27 @@ impl Show for Uuid {
   }
 }
 
-# --- Core effect ---
+# --- Core effects ---
+#
+# The effects describe *how* SQL gets executed (delegating to the bridge), and
+# the connection is passed in by the caller. This keeps the handler stateless
+# and lets the user thread multiple connections through the same handler — read
+# replica vs primary, sharding, etc. Test code can swap in a mock handler that
+# ignores the connection and returns canned data.
 
-effect Postgres {
-  fun raw_execute : String -> List Value -> Result (Returned Dynamic) QueryError
+pub effect Postgres {
+  fun raw_execute : Connection -> String -> List Value -> Result (Returned Dynamic) QueryError
+}
+
+#@ Transactions. Handlers for `Transaction` declare `needs {Postgres}` because
+#@ the user's callback uses Postgres operations. The real handler delegates to
+#@ `pgo:transaction`, so all queries inside the callback automatically join the
+#@ same transaction connection via pgo's process dictionary.
+#@
+#@ Multi-shot continuations whose captured slice escapes the callback boundary
+#@ are not supported and will run their re-invocations outside any transaction.
+pub effect Transaction {
+  fun transaction : Connection -> (Unit -> Result a QueryError needs {Postgres}) -> Result a QueryError
 }
 
 # --- Convenience wrappers ---
@@ -147,10 +174,20 @@ effect Postgres {
 #@ Run a SQL statement directly with a flat parameter list. This is the
 #@ low-level primitive — use it when you don't need the builder, or when
 #@ building a higher-level query API on top of this library. For application
-#@ code that wants ergonomics, prefer the builder: `sql "..." |> ... |> execute`.
-pub fun query : String -> List Value -> Result (Returned Dynamic) QueryError
+#@ code that wants ergonomics, prefer the builder: `sql "..." |> ... |> execute conn`.
+pub fun query : Connection -> String -> List Value -> Result (Returned Dynamic) QueryError
   needs {Postgres}
-query sql params = raw_execute! sql params
+query conn sql params = raw_execute! conn sql params
+
+#@ Run a callback inside a database transaction. All `Postgres` effects
+#@ performed inside the callback against the same connection are routed to the
+#@ transaction, and the transaction commits if the callback returns `Ok`, rolls
+#@ back if it returns `Err`. Uses pgo's process-dictionary mechanism under the
+#@ hood, so don't let captured continuations from inside the callback escape
+#@ the boundary — re-invoking them later will run outside any transaction.
+pub fun transaction : Connection -> (Unit -> Result a QueryError needs {Postgres}) -> Result a QueryError
+  needs {Postgres, Transaction}
+transaction conn f = transaction! conn f
 
 # --- Query builder ---
 
@@ -166,19 +203,20 @@ record QbState {
 #@ A composable query builder. Build up a SQL string and its parameters with
 #@ `push`, `push_bind`, and `push_values`, then finalize by passing it to
 #@ `build` together with an executor function (typically `execute`).
-pub opaque type QueryBuilder = QueryBuilder QbState
+opaque type QueryBuilder = QueryBuilder QbState
 
 #@ Start a new query builder from a SQL prefix. The prefix is treated as raw
 #@ text — if it contains pre-written `$N` placeholders, attach their values
 #@ with `bind_values`. Otherwise, use `push_bind` / `push_values` to add
 #@ auto-numbered placeholders. Don't mix the two modes for the same query.
 pub fun sql : String -> QueryBuilder
-sql s = QueryBuilder (QbState {
-  fragments: [s],
-  params: [],
-  next_index: 1,
-  values_started: False,
-})
+sql s =
+  QueryBuilder (QbState {
+    fragments: [s],
+    params: [],
+    next_index: 1,
+    values_started: False,
+  })
 
 #@ Bind a flat list of values to the pre-written `$N` placeholders in the SQL.
 #@ Records the values and advances the placeholder counter, but does not emit
@@ -239,10 +277,11 @@ push_values rows bind_row qb = case rows {
     let param_rows = List.map bind_row rows
     let QueryBuilder state = qb
     let prefix = if state.values_started then ", " else " values "
-    let qb2 = QueryBuilder ({ state |
-      fragments: prefix :: state.fragments,
-      values_started: True,
-    })
+    let qb2 =
+      QueryBuilder ({ state |
+        fragments: prefix :: state.fragments,
+        values_started: True,
+      })
     emit_value_rows param_rows qb2
   }
 }
@@ -273,27 +312,53 @@ emit_cols cols qb = case cols {
     |> emit_cols rest
 }
 
-#@ Finalize the builder and execute the query against the Postgres handler.
-#@ This is the primary way to run queries — use `execute_raw` only if you need
-#@ to bypass the builder entirely.
-pub fun execute : QueryBuilder -> Result (Returned Dynamic) QueryError needs {Postgres}
-execute qb = {
+#@ Finalize the builder and execute the query against the given connection.
+#@ This is the primary way to run queries — use `query` only if you don't
+#@ need the builder. Conn comes first for partial application:
+#@   sql "..." |> push_values ... |> execute conn
+pub fun execute : Connection -> QueryBuilder -> Result (Returned Dynamic) QueryError
+  needs {Postgres}
+execute conn qb = {
   let QueryBuilder state = qb
   let sql_text = String.join "" (List.reverse state.fragments)
   let params = List.reverse state.params
-  raw_execute! sql_text params
+  raw_execute! conn sql_text params
 }
 
-# --- Handler ---
+# --- Handlers ---
 
-#@ Start a connection pool and provide the Postgres handler.
-pub fun connect : Config -> Handler Postgres
-connect config = {
-  let pool = start_pool config
-  handler for Postgres {
-    raw_execute sql params = {
-      let result = bridge_query pool sql params
-      resume result
+#@ Start a connection pool and return a `Connection` handle. Pass this to
+#@ `query`, `execute`, and `transaction`. Multiple calls to `connect` give
+#@ you multiple independent pools.
+pub fun connect : Config -> Connection
+connect config = start_pool config
+
+#@ The real Postgres handler. Stateless — describes *how* to execute SQL by
+#@ delegating to the bridge. The connection is passed in by the caller.
+pub handler pg for Postgres {
+  raw_execute conn sql params = {
+    let result = bridge_query conn sql params
+    resume result
+  }
+}
+
+#@ The real Transaction handler. Drives the lifecycle from saga (we can't
+#@ pass an effectful saga lambda to `pgo:transaction` because the lambda
+#@ compiles to a CPS closure Erlang can't invoke). The bridge primitives
+#@ acquire / release a connection and stash it in pgo's process dictionary,
+#@ so `raw_execute!` calls inside `f ()` automatically join the transaction.
+pub handler pg_transaction for Transaction needs {Postgres} {
+  transaction conn f = {
+    case bridge_begin_tx conn {
+      Err e -> resume (Err e)
+      Ok handle -> {
+        let result = f ()
+        let _ = case result {
+          Ok _ -> bridge_commit_tx handle
+          Err _ -> bridge_rollback_tx handle
+        }
+        resume result
+      }
     }
   }
 }
@@ -305,3 +370,18 @@ fun start_pool : Config -> Connection
 
 @external("erlang", "saga_pgo_bridge", "query")
 fun bridge_query : Connection -> String -> List Value -> Result (Returned Dynamic) QueryError
+
+# Internal handle for an in-flight transaction. Wraps the {Ref, Conn} pair
+# returned by pgo:checkout so commit/rollback can find their way back to the
+# right connection. Not exposed to users — only the Transaction handler arm
+# touches it, between bridge_begin_tx and bridge_commit_tx/bridge_rollback_tx.
+type TxHandle = TxHandle Dynamic
+
+@external("erlang", "saga_pgo_bridge", "begin_tx")
+fun bridge_begin_tx : Connection -> Result TxHandle QueryError
+
+@external("erlang", "saga_pgo_bridge", "commit_tx")
+fun bridge_commit_tx : TxHandle -> Unit
+
+@external("erlang", "saga_pgo_bridge", "rollback_tx")
+fun bridge_rollback_tx : TxHandle -> Unit

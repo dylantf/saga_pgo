@@ -6,12 +6,15 @@ import Std.IO (console)
 import SagaPgo (
   default_config,
   connect,
+  pg,
+  pg_transaction,
   execute,
   query,
   sql,
   bind_values,
   push,
   push_values,
+  transaction,
   text,
   int_value,
   naive_datetime,
@@ -42,15 +45,15 @@ main () = {
       port: 5432,
     }
 
-  let db = connect config
+  let conn = connect config
 
   let _ =
-    query "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
+    query conn "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
 
   let _ =
     sql "INSERT INTO users (name, age) VALUES ($1, $2)"
     |> bind_values [text "Alice", int_value 30]
-    |> execute
+    |> execute conn
 
   # Bulk insert with the query builder. `push_values` handles parens, commas,
   # and $N numbering; `returning id` is just appended after.
@@ -60,11 +63,13 @@ main () = {
     NewUser { name: "Dave", age: 35 },
   ]
 
-  let bulk_result =
+  # Run the bulk insert inside a transaction so it commits or rolls back atomically
+  let bulk_result = transaction conn (fun () -> {
     sql "INSERT INTO users (name, age)"
     |> push_values new_users (fun u -> [text u.name, int_value u.age])
     |> push "RETURNING id"
-    |> execute
+    |> execute conn
+  })
 
   case bulk_result {
     Ok r -> println $"Bulk inserted {r.count} users"
@@ -74,7 +79,7 @@ main () = {
   let lookup =
     sql "SELECT id, name, age, created_at FROM users WHERE name = $1"
     |> bind_values [text "Alice"]
-    |> execute
+    |> execute conn
 
   case lookup {
     Ok returned -> {
@@ -98,4 +103,4 @@ main () = {
     }
     Err _ -> println "query failed"
   }
-} with {db, console}
+} with {pg_transaction, pg, console}

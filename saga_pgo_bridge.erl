@@ -1,6 +1,6 @@
 -module(saga_pgo_bridge).
 
--export([start_pool/1, query/3, coerce/1, decode_naive_datetime/1, encode_date/1, decode_uuid/1, parse_uuid/1]).
+-export([start_pool/1, query/3, begin_tx/1, commit_tx/1, rollback_tx/1, coerce/1, decode_naive_datetime/1, encode_date/1, decode_uuid/1, parse_uuid/1]).
 
 coerce(Value) ->
     Value.
@@ -27,13 +27,74 @@ start_pool({sagapgo_Config, Host, Port, Database, User, Password, PoolSize, Ssl}
     end.
 
 query({sagapgo_Connection, Pool}, Sql, Params) ->
-    Options = #{pool => Pool},
-    case pgo:query(Sql, Params, Options) of
-        #{rows := Rows, num_rows := NumRows} ->
-            {ok, {sagapgo_Returned, NumRows, Rows}};
-        {error, Error} ->
-            {error, convert_error(Error)}
+    try
+        Options = #{pool => Pool},
+        case pgo:query(Sql, Params, Options) of
+            #{rows := Rows, num_rows := NumRows} ->
+                {ok, {sagapgo_Returned, NumRows, Rows}};
+            {error, Error} ->
+                {error, convert_error(Error)}
+        end
+    catch
+        Type:Reason ->
+            {error, {sagapgo_PostgresqlError,
+                     atom_to_binary(Type, utf8),
+                     <<"caught">>,
+                     format_term(Reason)}}
     end.
+
+%% Transaction lifecycle primitives. We can't pass a saga effectful callback to
+%% pgo:transaction (it compiles to a CPS closure that Erlang can't invoke), so
+%% we expose begin/commit/rollback separately and let saga drive the lifecycle.
+%%
+%% begin_tx checks out a connection, runs BEGIN, and stores the connection in
+%% pgo_transaction_connection so subsequent pgo:query calls (from query/3 above)
+%% automatically use it. The {Ref, Conn} pair is wrapped in a TxHandle so saga
+%% can pass it back to commit_tx / rollback_tx.
+begin_tx({sagapgo_Connection, Pool}) ->
+    try
+        case pgo:checkout(Pool, []) of
+            {ok, Ref, Conn} ->
+                case pgo_handler:extended_query(Conn, "BEGIN", [], #{queue_time => undefined}) of
+                    #{command := 'begin'} ->
+                        put(pgo_transaction_connection, Conn),
+                        {ok, {sagapgo_TxHandle, {Ref, Conn}}};
+                    Other ->
+                        pgo:checkin(Ref, Conn),
+                        {error, {sagapgo_PostgresqlError,
+                                 <<"begin failed">>,
+                                 <<"unknown">>,
+                                 format_term(Other)}}
+                end;
+            {error, CheckoutErr} ->
+                {error, convert_error(CheckoutErr)}
+        end
+    catch
+        Type:Reason ->
+            {error, {sagapgo_PostgresqlError,
+                     atom_to_binary(Type, utf8),
+                     <<"caught">>,
+                     format_term(Reason)}}
+    end.
+
+%% commit_tx and rollback_tx are total — they swallow any cleanup-time errors
+%% so the saga handler arm can rely on them returning Unit. The connection is
+%% always returned to the pool and the process dict entry is always cleared,
+%% even if the COMMIT/ROLLBACK statement itself fails.
+commit_tx({sagapgo_TxHandle, {Ref, Conn}}) ->
+    catch pgo_handler:extended_query(Conn, "COMMIT", [], #{queue_time => undefined}),
+    catch pgo:checkin(Ref, Conn),
+    erase(pgo_transaction_connection),
+    unit.
+
+rollback_tx({sagapgo_TxHandle, {Ref, Conn}}) ->
+    catch pgo_handler:extended_query(Conn, "ROLLBACK", [], #{queue_time => undefined}),
+    catch pgo:checkin(Ref, Conn),
+    erase(pgo_transaction_connection),
+    unit.
+
+format_term(T) ->
+    list_to_binary(io_lib:format("~p", [T])).
 
 convert_error(none_available) ->
     {sagapgo_ConnectionUnavailable};
