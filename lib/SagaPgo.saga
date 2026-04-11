@@ -50,6 +50,7 @@ pub type QueryError =
   | UnexpectedResultType String
   | QueryTimeout
   | ConnectionUnavailable
+  deriving (Debug)
 
 # --- Query result ---
 
@@ -350,7 +351,7 @@ pub handler pg for Postgres {
 pub handler pg_transaction for Transaction needs {Postgres} {
   transaction conn f = {
     case bridge_begin_tx conn {
-      Err e -> resume (Err e)
+      Err e -> resume Err e
       Ok handle -> {
         let result = f ()
         let _ = case result {
