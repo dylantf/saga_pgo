@@ -64,7 +64,10 @@ pub record Returned a {
 opaque type Value = Value Dynamic
 
 pub fun null : Unit -> Value
-null () = coerce_value ()
+null () = make_null ()
+
+@external("erlang", "saga_pgo_bridge", "make_null")
+fun make_null : Unit -> Value
 
 pub fun int_value : Int -> Value
 int_value n = coerce_value n

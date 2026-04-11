@@ -1,9 +1,15 @@
 -module(saga_pgo_bridge).
 
--export([start_pool/1, query/3, begin_tx/1, commit_tx/1, rollback_tx/1, coerce/1, decode_naive_datetime/1, encode_date/1, decode_uuid/1, parse_uuid/1]).
+-export([start_pool/1, query/3, begin_tx/1, commit_tx/1, rollback_tx/1, coerce/1, make_null/0, decode_naive_datetime/1, encode_date/1, decode_uuid/1, parse_uuid/1]).
 
 coerce(Value) ->
     Value.
+
+%% NULL parameter — pgo's encoders recognize the atom `null`, not `unit`.
+%% Saga's `null ()` calls this so the parameter wire-encodes correctly.
+%% Saga's `Unit -> X` lowers to a zero-arity Erlang function.
+make_null() ->
+    null.
 
 start_pool({sagapgo_Config, Host, Port, Database, User, Password, PoolSize, Ssl}) ->
     application:set_env(pg_types, timestamp_config, integer_system_time_microseconds),
@@ -27,21 +33,78 @@ start_pool({sagapgo_Config, Host, Port, Database, User, Password, PoolSize, Ssl}
     end.
 
 query({sagapgo_Connection, Pool}, Sql, Params) ->
-    try
-        Options = #{pool => Pool},
-        case pgo:query(Sql, Params, Options) of
-            #{rows := Rows, num_rows := NumRows} ->
-                {ok, {sagapgo_Returned, NumRows, Rows}};
-            {error, Error} ->
-                {error, convert_error(Error)}
-        end
-    catch
-        Type:Reason ->
-            {error, {sagapgo_PostgresqlError,
-                     atom_to_binary(Type, utf8),
-                     <<"caught">>,
-                     format_term(Reason)}}
+    Options = #{pool => Pool},
+    case pgo:query(Sql, Params, Options) of
+        #{rows := Rows, num_rows := NumRows} ->
+            {ok, {sagapgo_Returned, NumRows, Rows}};
+        {error, badarg} ->
+            %% pgo's bind-message encoder caught a badarg and stripped the
+            %% stacktrace before returning. We can't recover the original frame,
+            %% but we can summarize the first few param shapes so you can spot
+            %% which slot has a wire-incompatible value.
+            ParamCount = length(Params),
+            %% Detect row width from the first VALUES (...) group in the SQL,
+            %% so we show just one row's worth of params instead of all 10000.
+            RowWidth =
+                case row_width_from_sql(Sql) of
+                    0 -> min(ParamCount, 12);
+                    N -> N
+                end,
+            Sample = lists:sublist(Params, 1, RowWidth),
+            io:format(standard_error,
+                "[saga_pgo] badarg from pgo encoder~n"
+                "  sql:        ~ts~n"
+                "  num params: ~p~n"
+                "  row width:  ~p (detected from first VALUES group)~n"
+                "  first row (look for the odd one out):~n",
+                [Sql, ParamCount, RowWidth]),
+            lists:foreach(
+                fun({I, P}) ->
+                    io:format(standard_error, "    [~p] ~ts: ~p~n",
+                        [I, classify(P), P])
+                end,
+                lists:zip(lists:seq(1, length(Sample)), Sample)),
+            {error, convert_error(badarg)};
+        {error, Error} ->
+            {error, convert_error(Error)}
     end.
+
+%% Detect the row width of an INSERT ... VALUES (...) ... query by counting
+%% $N placeholders inside the first parenthesized group after a `values`
+%% keyword. Returns 0 if no VALUES clause is found, in which case the caller
+%% falls back to a fixed cap. Case-insensitive on the keyword.
+row_width_from_sql(Sql) when is_binary(Sql) ->
+    case find_values(Sql) of
+        nomatch -> 0;
+        {ok, AfterValues} ->
+            case skip_to_paren(AfterValues) of
+                nomatch -> 0;
+                {ok, Inside} -> count_dollars_until_close(Inside, 0)
+            end
+    end.
+
+find_values(<<"values", Rest/binary>>) -> {ok, Rest};
+find_values(<<"VALUES", Rest/binary>>) -> {ok, Rest};
+find_values(<<"Values", Rest/binary>>) -> {ok, Rest};
+find_values(<<_, Rest/binary>>) -> find_values(Rest);
+find_values(<<>>) -> nomatch.
+
+skip_to_paren(<<$(, Rest/binary>>) -> {ok, Rest};
+skip_to_paren(<<_, Rest/binary>>) -> skip_to_paren(Rest);
+skip_to_paren(<<>>) -> nomatch.
+
+count_dollars_until_close(<<$), _/binary>>, Acc) -> Acc;
+count_dollars_until_close(<<$$, Rest/binary>>, Acc) ->
+    %% Skip the digits of $N to avoid double-counting on $123 etc.
+    {_, AfterDigits} = skip_digits(Rest),
+    count_dollars_until_close(AfterDigits, Acc + 1);
+count_dollars_until_close(<<_, Rest/binary>>, Acc) ->
+    count_dollars_until_close(Rest, Acc);
+count_dollars_until_close(<<>>, Acc) -> Acc.
+
+skip_digits(<<C, Rest/binary>>) when C >= $0, C =< $9 ->
+    skip_digits(Rest);
+skip_digits(B) -> {ok, B}.
 
 %% Transaction lifecycle primitives. We can't pass a saga effectful callback to
 %% pgo:transaction (it compiles to a CPS closure that Erlang can't invoke), so
