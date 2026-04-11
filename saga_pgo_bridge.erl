@@ -1,6 +1,6 @@
 -module(saga_pgo_bridge).
 
--export([start_pool/1, query/3, coerce/1, decode_naive_datetime/1, decode_uuid/1, parse_uuid/1]).
+-export([start_pool/1, query/3, coerce/1, decode_naive_datetime/1, encode_date/1, decode_uuid/1, parse_uuid/1]).
 
 coerce(Value) ->
     Value.
@@ -86,6 +86,12 @@ decode_naive_datetime({{Y, Mo, D}, {H, Mi, S}}) when is_float(S) ->
 decode_naive_datetime(Other) ->
     Found = classify(Other),
     {error, {std_dynamic_DecodeError, <<"NaiveDateTime">>, Found, []}}.
+
+%% Postgres DATE encoder. pg_date expects a plain {Year, Month, Day} 3-tuple
+%% (see deps/pg_types/src/pg_date.erl), but a saga `Std.DateTime.Date` lowers
+%% to the tagged 4-tuple {std_datetime_Date, Y, M, D}. Strip the tag.
+encode_date({std_datetime_Date, Y, M, D}) ->
+    {Y, M, D}.
 
 classify(V) when is_binary(V) -> <<"String">>;
 classify(V) when is_integer(V) -> <<"Int">>;

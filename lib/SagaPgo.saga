@@ -1,7 +1,7 @@
 module SagaPgo
 
 import Std.Dynamic (Dynamic, Decoder, DecodeError, from_erlang, string, int, float, bool)
-import Std.DateTime (NaiveDateTime)
+import Std.DateTime (Date, NaiveDateTime)
 
 # --- Connection config ---
 
@@ -67,6 +67,19 @@ text s = coerce_value s
 pub fun bool_value : Bool -> Value
 bool_value b = coerce_value b
 
+#@ Encode an optional value as a query parameter, emitting NULL when the
+#@ value is `Nothing`. Takes an encoder function so it composes with any
+#@ value encoder:
+#@
+#@   maybe_null text maybe_username
+#@   maybe_null int_value maybe_age
+#@   maybe_null date_value maybe_birthday
+pub fun maybe_null : (a -> Value) -> Maybe a -> Value
+maybe_null encode m = case m {
+  Just v -> encode v
+  Nothing -> null ()
+}
+
 @external("erlang", "saga_pgo_bridge", "coerce")
 fun coerce_value : a -> Value
 
@@ -78,6 +91,13 @@ fun decode_naive_datetime_raw : Dynamic -> Result NaiveDateTime DecodeError
 #@ Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
 #@ Both are decoded to a NaiveDateTime in UTC.
 pub val naive_datetime = Decoder decode_naive_datetime_raw
+
+@external("erlang", "saga_pgo_bridge", "encode_date")
+fun encode_date_raw : Date -> Value
+
+#@ Encode a Date as a query parameter for Postgres DATE columns.
+pub fun date_value : Date -> Value
+date_value d = encode_date_raw d
 
 #@ A Postgres UUID. Internally a 36-character canonical hyphenated string.
 pub opaque type Uuid = Uuid String
