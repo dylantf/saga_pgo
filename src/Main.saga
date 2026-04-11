@@ -1,14 +1,17 @@
 module Main
 
 import Std.DateTime (NaiveDateTime, format)
-
 import Std.Dynamic (string, int, decode_element)
-
 import Std.IO (console)
 import SagaPgo (
   default_config,
   connect,
   execute,
+  query,
+  sql,
+  bind_values,
+  push,
+  push_values,
   text,
   int_value,
   naive_datetime,
@@ -26,6 +29,11 @@ record User {
   created_at: NaiveDateTime,
 }
 
+record NewUser {
+  name: String,
+  age: Int,
+}
+
 main () = {
   let config =
     { default_config "mydb" |
@@ -37,16 +45,38 @@ main () = {
   let db = connect config
 
   let _ =
-    execute "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
+    query "CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT, age INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())" []
 
   let _ =
-    execute "INSERT INTO users (name, age) VALUES ($1, $2)" [
-      text "Alice",
-      int_value 30,
-    ]
+    sql "INSERT INTO users (name, age) VALUES ($1, $2)"
+    |> bind_values [text "Alice", int_value 30]
+    |> execute
 
-  let sql = "SELECT id, name, age, created_at FROM users WHERE name = $1"
-  case execute sql [text "Alice"] {
+  # Bulk insert with the query builder. `push_values` handles parens, commas,
+  # and $N numbering; `returning id` is just appended after.
+  let new_users = [
+    NewUser { name: "Bob", age: 25 },
+    NewUser { name: "Carol", age: 28 },
+    NewUser { name: "Dave", age: 35 },
+  ]
+
+  let bulk_result =
+    sql "INSERT INTO users (name, age)"
+    |> push_values new_users (fun u -> [text u.name, int_value u.age])
+    |> push "RETURNING id"
+    |> execute
+
+  case bulk_result {
+    Ok r -> println $"Bulk inserted {r.count} users"
+    Err _ -> println "bulk insert failed"
+  }
+
+  let lookup =
+    sql "SELECT id, name, age, created_at FROM users WHERE name = $1"
+    |> bind_values [text "Alice"]
+    |> execute
+
+  case lookup {
     Ok returned -> {
       println $"Got {List.length returned.rows} rows"
       case returned.rows {

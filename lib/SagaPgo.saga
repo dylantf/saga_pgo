@@ -124,14 +124,145 @@ effect Postgres {
 
 # --- Convenience wrappers ---
 
-#@ Execute a SQL statement with parameters. Returns `Returned` containing the
-#@ affected row count and the raw rows as `Dynamic` terms. For statements that
-#@ don't return rows (DDL, plain INSERT/UPDATE/DELETE), discard the result
-#@ with `let _ = execute ...` or pattern-match on `returned.count`.
-#@ Rows are decoded at the call site with `Std.Dynamic.decode_element`.
-pub fun execute : String -> List Value -> Result (Returned Dynamic) QueryError
+#@ Run a SQL statement directly with a flat parameter list. This is the
+#@ low-level primitive — use it when you don't need the builder, or when
+#@ building a higher-level query API on top of this library. For application
+#@ code that wants ergonomics, prefer the builder: `sql "..." |> ... |> execute`.
+pub fun query : String -> List Value -> Result (Returned Dynamic) QueryError
   needs {Postgres}
-execute sql params = raw_execute! sql params
+query sql params = raw_execute! sql params
+
+# --- Query builder ---
+
+#@ Internal builder state. Fragments and params are accumulated in reverse for
+#@ O(1) prepend, then reversed in `build`.
+record QbState {
+  fragments: List String,
+  params: List Value,
+  next_index: Int,
+  values_started: Bool,
+}
+
+#@ A composable query builder. Build up a SQL string and its parameters with
+#@ `push`, `push_bind`, and `push_values`, then finalize by passing it to
+#@ `build` together with an executor function (typically `execute`).
+pub opaque type QueryBuilder = QueryBuilder QbState
+
+#@ Start a new query builder from a SQL prefix. The prefix is treated as raw
+#@ text — if it contains pre-written `$N` placeholders, attach their values
+#@ with `bind_values`. Otherwise, use `push_bind` / `push_values` to add
+#@ auto-numbered placeholders. Don't mix the two modes for the same query.
+pub fun sql : String -> QueryBuilder
+sql s = QueryBuilder (QbState {
+  fragments: [s],
+  params: [],
+  next_index: 1,
+  values_started: False,
+})
+
+#@ Bind a flat list of values to the pre-written `$N` placeholders in the SQL.
+#@ Records the values and advances the placeholder counter, but does not emit
+#@ any SQL. Use this when the prefix already contains `$1, $2, ...`.
+pub fun bind_values : List Value -> QueryBuilder -> QueryBuilder
+bind_values vs qb = {
+  let QueryBuilder state = qb
+  let new_params = List.foldl (fun acc v -> v :: acc) state.params vs
+  QueryBuilder ({ state |
+    params: new_params,
+    next_index: state.next_index + List.length vs,
+  })
+}
+
+#@ Append a SQL fragment, automatically prepending a space so callers don't
+#@ have to manage spacing manually. Empty strings are a no-op.
+pub fun push : String -> QueryBuilder -> QueryBuilder
+push s qb =
+  if String.is_empty s then qb
+  else append_raw (" " <> s) qb
+
+#@ Bind one parameter, emitting a ` $N` placeholder (with leading space) at the
+#@ current position so it reads cleanly after a SQL operator like `name =`.
+pub fun push_bind : Value -> QueryBuilder -> QueryBuilder
+push_bind v qb = append_raw " " qb |> append_bind v
+
+# Append a fragment exactly as given, without any spacing. Used by the value
+# emitters that need precise control over commas and parens.
+fun append_raw : String -> QueryBuilder -> QueryBuilder
+append_raw s qb = {
+  let QueryBuilder state = qb
+  QueryBuilder ({ state | fragments: s :: state.fragments })
+}
+
+# Emit a `$N` placeholder and record the value, with no surrounding spacing.
+fun append_bind : Value -> QueryBuilder -> QueryBuilder
+append_bind v qb = {
+  let QueryBuilder state = qb
+  let placeholder = "$" <> show state.next_index
+  QueryBuilder ({ state |
+    fragments: placeholder :: state.fragments,
+    params: v :: state.params,
+    next_index: state.next_index + 1,
+  })
+}
+
+#@ Append `(p1, p2, ...)` row groups for each row, auto-numbering placeholders
+#@ and flattening parameters. The first call emits ` values `; subsequent calls
+#@ append more rows separated by commas, so multiple `push_values` calls merge
+#@ into one contiguous values clause. An empty `rows` list is a no-op.
+#@
+#@ Note: don't interleave non-values pushes between consecutive `push_values`
+#@ calls — the comma joining will produce broken SQL.
+pub fun push_values : (rows: List a) -> (bind_row: a -> List Value) -> QueryBuilder -> QueryBuilder
+push_values rows bind_row qb = case rows {
+  [] -> qb
+  _ -> {
+    let param_rows = List.map bind_row rows
+    let QueryBuilder state = qb
+    let prefix = if state.values_started then ", " else " values "
+    let qb2 = QueryBuilder ({ state |
+      fragments: prefix :: state.fragments,
+      values_started: True,
+    })
+    emit_value_rows param_rows qb2
+  }
+}
+
+fun emit_value_rows : List (List Value) -> QueryBuilder -> QueryBuilder
+emit_value_rows rows qb = case rows {
+  [] -> qb
+  [last] -> emit_row last qb
+  row :: rest ->
+    emit_row row qb
+    |> append_raw ", "
+    |> emit_value_rows rest
+}
+
+fun emit_row : List Value -> QueryBuilder -> QueryBuilder
+emit_row cols qb =
+  append_raw "(" qb
+  |> emit_cols cols
+  |> append_raw ")"
+
+fun emit_cols : List Value -> QueryBuilder -> QueryBuilder
+emit_cols cols qb = case cols {
+  [] -> qb
+  [v] -> append_bind v qb
+  v :: rest ->
+    append_bind v qb
+    |> append_raw ", "
+    |> emit_cols rest
+}
+
+#@ Finalize the builder and execute the query against the Postgres handler.
+#@ This is the primary way to run queries — use `execute_raw` only if you need
+#@ to bypass the builder entirely.
+pub fun execute : QueryBuilder -> Result (Returned Dynamic) QueryError needs {Postgres}
+execute qb = {
+  let QueryBuilder state = qb
+  let sql_text = String.join "" (List.reverse state.fragments)
+  let params = List.reverse state.params
+  raw_execute! sql_text params
+}
 
 # --- Handler ---
 
