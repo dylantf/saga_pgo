@@ -230,7 +230,7 @@ classify(_) -> <<"Unknown">>.
 %% binary in canonical form (lowercase hex with hyphens). We trust postgres'
 %% stored value and just wrap it.
 decode_uuid(V) when is_binary(V), byte_size(V) =:= 36 ->
-    {ok, {sagapgo_Uuid, V}};
+    {ok, {sagapgo_types_Uuid, V}};
 decode_uuid(V) when is_binary(V) ->
     {error, {std_dynamic_DecodeError, <<"Uuid">>, <<"String of wrong length">>, []}};
 decode_uuid(Other) ->
@@ -239,7 +239,7 @@ decode_uuid(Other) ->
 %% Validate a user-supplied UUID string. Accepts canonical hyphenated form.
 parse_uuid(<<A:8/binary, "-", B:4/binary, "-", C:4/binary, "-", D:4/binary, "-", E:12/binary>>) ->
     case all_hex(A) andalso all_hex(B) andalso all_hex(C) andalso all_hex(D) andalso all_hex(E) of
-        true -> {ok, <<A/binary, "-", B/binary, "-", C/binary, "-", D/binary, "-", E/binary>>};
+        true -> {ok, {sagapgo_types_Uuid, <<A/binary, "-", B/binary, "-", C/binary, "-", D/binary, "-", E/binary>>}};
         false -> {error, <<"invalid UUID: non-hex character">>}
     end;
 parse_uuid(_) ->

@@ -1,17 +1,8 @@
 module SagaPgo
 
 import Std.DateTime (Date, NaiveDateTime)
-
-import Std.Dynamic (
-  Dynamic,
-  Decoder,
-  DecodeError,
-  from_erlang,
-  string,
-  int,
-  float,
-  bool
-)
+import Std.Dynamic (Dynamic)
+import SagaPgo.Types (Value)
 
 # --- Connection config ---
 
@@ -57,97 +48,6 @@ pub type QueryError =
 pub record Returned a {
   count: Int,
   rows: List a,
-}
-
-# --- Parameter values ---
-
-opaque type Value = Value Dynamic
-
-pub fun null : Unit -> Value
-null () = make_null ()
-
-@external("erlang", "saga_pgo_bridge", "make_null")
-fun make_null : Unit -> Value
-
-pub fun int_value : Int -> Value
-int_value n = coerce_value n
-
-pub fun float_value : Float -> Value
-float_value f = coerce_value f
-
-pub fun text : String -> Value
-text s = coerce_value s
-
-pub fun bool_value : Bool -> Value
-bool_value b = coerce_value b
-
-#@ Encode an optional value as a query parameter, emitting NULL when the
-#@ value is `Nothing`. Takes an encoder function so it composes with any
-#@ value encoder:
-#@
-#@   maybe_null text maybe_username
-#@   maybe_null int_value maybe_age
-#@   maybe_null date_value maybe_birthday
-pub fun maybe_null : (a -> Value) -> Maybe a -> Value
-maybe_null encode m = case m {
-  Just v -> encode v
-  Nothing -> null ()
-}
-
-@external("erlang", "saga_pgo_bridge", "coerce")
-fun coerce_value : a -> Value
-
-# --- Postgres-specific decoders ---
-
-@external("erlang", "saga_pgo_bridge", "decode_naive_datetime")
-fun decode_naive_datetime_raw : Dynamic -> Result NaiveDateTime DecodeError
-
-#@ Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
-#@ Both are decoded to a NaiveDateTime in UTC.
-pub val naive_datetime = Decoder decode_naive_datetime_raw
-
-@external("erlang", "saga_pgo_bridge", "encode_date")
-fun encode_date_raw : Date -> Value
-
-#@ Encode a Date as a query parameter for Postgres DATE columns.
-pub fun date_value : Date -> Value
-date_value d = encode_date_raw d
-
-#@ A Postgres UUID. Internally a 36-character canonical hyphenated string.
-opaque type Uuid = Uuid String
-
-#@ Convert a Uuid to its canonical hyphenated string form.
-pub fun uuid_to_string : Uuid -> String
-uuid_to_string u = case u {
-  Uuid s -> s
-}
-
-@external("erlang", "saga_pgo_bridge", "parse_uuid")
-fun parse_uuid_raw : String -> Result String String
-
-#@ Parse a string into a Uuid. Accepts canonical hyphenated form.
-pub fun uuid_from_string : String -> Result Uuid String
-uuid_from_string s = case parse_uuid_raw s {
-  Ok v -> Ok (Uuid v)
-  Err e -> Err e
-}
-
-#@ Encode a Uuid as a query parameter.
-pub fun uuid_value : Uuid -> Value
-uuid_value u = case u {
-  Uuid s -> coerce_value s
-}
-
-@external("erlang", "saga_pgo_bridge", "decode_uuid")
-fun decode_uuid_raw : Dynamic -> Result Uuid DecodeError
-
-#@ Decoder for Postgres UUID columns.
-pub val uuid = Decoder decode_uuid_raw
-
-impl Show for Uuid {
-  show u = case u {
-    Uuid s -> s
-  }
 }
 
 # --- Core effects ---

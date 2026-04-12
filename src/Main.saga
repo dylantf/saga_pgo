@@ -15,15 +15,11 @@ import SagaPgo (
   push,
   push_values,
   transaction,
-  text,
-  int_value,
-  naive_datetime,
-  uuid,
-  Uuid,
   Config,
   Returned,
   QueryError
 )
+import SagaPgo.Types as T (Uuid, uuid, naive_datetime)
 
 record User {
   id: Uuid,
@@ -58,18 +54,18 @@ main () = {
 
   let _ =
     query conn "INSERT INTO users (name, age) VALUES ($1, $2)" [
-      text "Alice",
-      int_value 30,
+      T.pg_text "Alice",
+      T.pg_int 30,
     ]
 
   let _ =
     sql "INSERT INTO users (name, age) VALUES ($1, $2)"
-    |> bind_values [text "Alice", int_value 30]
+    |> bind_values [T.pg_text "Alice", T.pg_int 30]
     |> execute conn
 
   let bulk_result = transaction conn (fun () -> {
     sql "INSERT INTO users (name, age)"
-    |> push_values new_users (fun u -> [text u.name, int_value u.age])
+    |> push_values new_users (fun u -> [T.pg_text u.name, T.pg_int u.age])
     |> push "RETURNING id"
     |> execute conn
   })
@@ -81,7 +77,7 @@ main () = {
 
   let lookup =
     sql "SELECT id, name, age, created_at FROM users WHERE name = $1"
-    |> bind_values [text "Alice"]
+    |> bind_values [T.pg_text "Alice"]
     |> execute conn
 
   case lookup {
@@ -98,7 +94,7 @@ main () = {
           Err e -> Err e
         } {
           Ok user ->
-            println $"{show user.id}: {user.name} is {show user.age}, created at {format "%FT%T" user.created_at}"
+            println $"{user.id}: {user.name} is {user.age}, created at {format "%FT%T" user.created_at}"
           Err _ -> println "decode failed"
         }
         [] -> println "no rows"

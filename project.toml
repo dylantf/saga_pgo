@@ -6,7 +6,7 @@ main = "src/Main.saga"
 
 [library]
 module = "SagaPgo"
-expose = ["SagaPgo"]
+expose = ["SagaPgo", "SagaPgo.Types"]
 
 [deps]
 pgo = { version = "0.20.0" }

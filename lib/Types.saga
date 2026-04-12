@@ -1,0 +1,83 @@
+module SagaPgo.Types
+
+import Std.DateTime (Date, NaiveDateTime)
+import Std.Dynamic (Dynamic, Decoder, DecodeError)
+
+opaque type Value = Value Dynamic
+
+@external("erlang", "saga_pgo_bridge", "coerce")
+fun coerce_value : a -> Value
+
+@external("erlang", "saga_pgo_bridge", "make_null")
+fun make_null : Unit -> Value
+
+pub fun pg_null : Unit -> Value
+pg_null () = make_null ()
+
+pub fun pg_int : Int -> Value
+pg_int n = coerce_value n
+
+pub fun pg_float : Float -> Value
+pg_float f = coerce_value f
+
+pub fun pg_text : String -> Value
+pg_text = coerce_value
+
+pub fun pg_bool : Bool -> Value
+pg_bool = coerce_value
+
+#@ Encode a Uuid as a query parameter.
+pub fun pg_uuid : Uuid -> Value
+pg_uuid = coerce_value
+
+@external("erlang", "saga_pgo_bridge", "encode_date")
+fun encode_date_raw : Date -> Value
+
+#@ Encode a Date as a query parameter for Postgres DATE columns.
+pub fun pg_date : Date -> Value
+pg_date d = encode_date_raw d
+
+#@ Encode an optional value as a query parameter, emitting NULL when the
+#@ value is `Nothing`. Takes an encoder function so it composes with any
+#@ value encoder:
+#@
+#@   maybe_null text maybe_username
+#@   maybe_null int_value maybe_age
+#@   maybe_null date_value maybe_birthday
+pub fun maybe_null : (a -> Value) -> Maybe a -> Value
+maybe_null encode m = case m {
+  Just v -> encode v
+  Nothing -> pg_null ()
+}
+
+# --------------------------------------
+
+@external("erlang", "saga_pgo_bridge", "decode_naive_datetime")
+fun decode_naive_datetime_raw : Dynamic -> Result NaiveDateTime DecodeError
+
+#@ Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
+#@ Both are decoded to a NaiveDateTime in UTC.
+pub val naive_datetime = Decoder decode_naive_datetime_raw
+
+#@ A Postgres UUID. Internally a 36-character canonical hyphenated string.
+opaque type Uuid = Uuid String
+
+impl Show for Uuid {
+  show (Uuid s) = s
+}
+
+@external("erlang", "saga_pgo_bridge", "parse_uuid")
+fun parse_uuid_raw : String -> Result String String
+
+#@ Parse a string into a Uuid. Accepts canonical hyphenated form.
+pub fun parse_uuid : String -> Result Uuid String
+parse_uuid s = case parse_uuid_raw s {
+  Ok v -> Ok (Uuid v)
+  Err e -> Err e
+}
+
+@external("erlang", "saga_pgo_bridge", "decode_uuid")
+fun decode_uuid_raw : Dynamic -> Result Uuid DecodeError
+
+#@ Decoder for Postgres UUID columns.
+pub val uuid = Decoder decode_uuid_raw
