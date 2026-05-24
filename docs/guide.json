@@ -1,0 +1,28 @@
+{
+  "sections": [
+    {
+      "slug": "getting-started",
+      "title": "Getting started",
+      "description": "Install, configure a connection pool, and run your first query.",
+      "group": "guide"
+    },
+    {
+      "slug": "queries",
+      "title": "Queries",
+      "description": "Running SQL with `query` and `execute`, and composing statements with the `sql` builder (`push`, `bind_values`, `push_bind`, `push_values`).",
+      "group": "guide"
+    },
+    {
+      "slug": "transactions",
+      "title": "Transactions",
+      "description": "Wrapping work in `transaction` with the `pg_transaction` handler, commit and rollback semantics, and pitfalls around escaping continuations.",
+      "group": "guide"
+    },
+    {
+      "slug": "types-and-decoding",
+      "title": "Types and decoding",
+      "description": "Encoding parameters with `pg_int`, `pg_text`, `pg_uuid`, `pg_date`, `maybe_null`, and decoding result columns with `uuid`, `naive_datetime`, and the `Std.Dynamic` decoders.",
+      "group": "guide"
+    }
+  ]
+}
