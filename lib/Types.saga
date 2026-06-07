@@ -57,7 +57,8 @@ fun decode_naive_datetime_raw : Dynamic -> Result NaiveDateTime DecodeError
 
 #@ Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
 #@ Both are decoded to a NaiveDateTime in UTC.
-pub val naive_datetime = Decoder decode_naive_datetime_raw
+pub fun naive_datetime : Decoder NaiveDateTime
+naive_datetime = Decoder decode_naive_datetime_raw
 
 #@ A Postgres UUID. Internally a 36-character canonical hyphenated string.
 opaque type Uuid = Uuid String
@@ -80,4 +81,5 @@ parse_uuid s = case parse_uuid_raw s {
 fun decode_uuid_raw : Dynamic -> Result Uuid DecodeError
 
 #@ Decoder for Postgres UUID columns.
-pub val uuid = Decoder decode_uuid_raw
+pub fun uuid : Decoder Uuid
+uuid = Decoder decode_uuid_raw

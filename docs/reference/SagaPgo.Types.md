@@ -23,7 +23,7 @@ A Postgres UUID. Internally a 36-character canonical hyphenated string.
 ### naive_datetime
 
 ```saga
-val naive_datetime
+fun naive_datetime : Decoder NaiveDateTime
 ```
 
 Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
@@ -32,7 +32,7 @@ Both are decoded to a NaiveDateTime in UTC.
 ### uuid
 
 ```saga
-val uuid
+fun uuid : Decoder Uuid
 ```
 
 Decoder for Postgres UUID columns.
@@ -106,4 +106,3 @@ fun parse_uuid : String -> Result Uuid String
 ```
 
 Parse a string into a Uuid. Accepts canonical hyphenated form.
-
