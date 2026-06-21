@@ -1,6 +1,6 @@
 module SagaPgo.Types
 
-import Std.DateTime (Date, NaiveDateTime)
+import Std.DateTime (Date, Time, NaiveDateTime)
 import Std.Dynamic (Dynamic, Decoder, DecodeError)
 
 opaque type Value = Value Dynamic
@@ -37,6 +37,21 @@ fun encode_date_raw : Date -> Value
 pub fun pg_date : Date -> Value
 pg_date d = encode_date_raw d
 
+@external("erlang", "saga_pgo_bridge", "encode_naive_datetime")
+fun encode_naive_datetime_raw : NaiveDateTime -> Value
+
+#@ Encode a NaiveDateTime as a query parameter for Postgres TIMESTAMP and
+#@ TIMESTAMPTZ columns. The value is treated as being in UTC.
+pub fun pg_naive_datetime : NaiveDateTime -> Value
+pg_naive_datetime dt = encode_naive_datetime_raw dt
+
+@external("erlang", "saga_pgo_bridge", "encode_time")
+fun encode_time_raw : Time -> Value
+
+#@ Encode a Time as a query parameter for Postgres TIME columns.
+pub fun pg_time : Time -> Value
+pg_time t = encode_time_raw t
+
 #@ Encode an optional value as a query parameter, emitting NULL when the
 #@ value is `Nothing`. Takes an encoder function so it composes with any
 #@ value encoder:
@@ -59,6 +74,20 @@ fun decode_naive_datetime_raw : Dynamic -> Result NaiveDateTime DecodeError
 #@ Both are decoded to a NaiveDateTime in UTC.
 pub fun naive_datetime : Decoder NaiveDateTime
 naive_datetime = Decoder decode_naive_datetime_raw
+
+@external("erlang", "saga_pgo_bridge", "decode_date")
+fun decode_date_raw : Dynamic -> Result Date DecodeError
+
+#@ Decoder for Postgres DATE columns.
+pub fun date : Decoder Date
+date = Decoder decode_date_raw
+
+@external("erlang", "saga_pgo_bridge", "decode_time")
+fun decode_time_raw : Dynamic -> Result Time DecodeError
+
+#@ Decoder for Postgres TIME columns.
+pub fun time : Decoder Time
+time = Decoder decode_time_raw
 
 #@ A Postgres UUID. Internally a 36-character canonical hyphenated string.
 opaque type Uuid = Uuid String

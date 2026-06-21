@@ -35,6 +35,7 @@ type QueryError =
   | UnexpectedResultType (expected: String)
   | QueryTimeout
   | ConnectionUnavailable
+  deriving (Debug)
 ```
 
 ### Returned

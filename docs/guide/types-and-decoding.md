@@ -16,6 +16,8 @@ The library ships a constructor per primitive:
 | `pg_bool` | `BOOLEAN` |
 | `pg_uuid` | `UUID` |
 | `pg_date` | `DATE` |
+| `pg_time` | `TIME` |
+| `pg_naive_datetime` | `TIMESTAMP`, `TIMESTAMPTZ` |
 | `pg_null ()` | `NULL` |
 
 Import the module qualified for readability:
@@ -95,6 +97,8 @@ From `SagaPgo.Types`:
 - `uuid` — decodes `UUID` columns into the opaque `Uuid` type.
 - `naive_datetime` — decodes `TIMESTAMP` and `TIMESTAMPTZ` columns
   into `Std.DateTime.NaiveDateTime` in UTC.
+- `date` — decodes `DATE` columns into `Std.DateTime.Date`.
+- `time` — decodes `TIME` columns into `Std.DateTime.Time`.
 
 ## Putting it together
 

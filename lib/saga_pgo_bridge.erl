@@ -1,6 +1,10 @@
 -module(saga_pgo_bridge).
 
--export([start_pool/1, query/3, begin_tx/1, commit_tx/1, rollback_tx/1, coerce/1, make_null/0, decode_naive_datetime/1, encode_date/1, decode_uuid/1, parse_uuid/1]).
+-export([start_pool/1, query/3, begin_tx/1, commit_tx/1, rollback_tx/1, coerce/1, make_null/0, decode_naive_datetime/1, encode_naive_datetime/1, encode_date/1, decode_date/1, encode_time/1, decode_time/1, decode_uuid/1, parse_uuid/1]).
+
+%% Gregorian seconds at the Unix epoch ({{1970,1,1},{0,0,0}}). Used to convert
+%% a UTC calendar datetime to/from system-time microseconds.
+-define(UNIX_EPOCH_GREGORIAN_SECONDS, 62167219200).
 
 coerce(Value) ->
     Value.
@@ -211,11 +215,53 @@ decode_naive_datetime(Other) ->
     Found = classify(Other),
     {error, {std_dynamic_DecodeError, <<"NaiveDateTime">>, Found, []}}.
 
+%% Postgres TIMESTAMP / TIMESTAMPTZ encoder. A saga NaiveDateTime is documented
+%% as UTC, so we compute exact system-time microseconds since the Unix epoch and
+%% hand pgo the integer. pg_timestamp's integer clause accepts system-time micros
+%% and shifts them onto the postgres 2000-01-01 epoch on the wire, so the same
+%% value encodes correctly for both TIMESTAMP and TIMESTAMPTZ. Using an integer
+%% (rather than float seconds) keeps sub-second precision exact.
+encode_naive_datetime({std_datetime_NaiveDateTime, Y, Mo, D, H, Mi, S, Us}) ->
+    Secs = calendar:datetime_to_gregorian_seconds({{Y, Mo, D}, {H, Mi, S}})
+        - ?UNIX_EPOCH_GREGORIAN_SECONDS,
+    Secs * 1000000 + Us.
+
 %% Postgres DATE encoder. pg_date expects a plain {Year, Month, Day} 3-tuple
 %% (see deps/pg_types/src/pg_date.erl), but a saga `Std.DateTime.Date` lowers
 %% to the tagged 4-tuple {std_datetime_Date, Y, M, D}. Strip the tag.
 encode_date({std_datetime_Date, Y, M, D}) ->
     {Y, M, D}.
+
+%% Postgres DATE decoder. pg_date decodes to a plain {Year, Month, Day} 3-tuple
+%% (calendar:gregorian_days_to_date) — the inverse of encode_date/1's output.
+%% Re-tag it as a saga Std.DateTime.Date.
+decode_date({Y, Mo, D}) when is_integer(Y), is_integer(Mo), is_integer(D) ->
+    {ok, {std_datetime_Date, Y, Mo, D}};
+decode_date(Other) ->
+    {error, {std_dynamic_DecodeError, <<"Date">>, classify(Other), []}}.
+
+%% Postgres TIME encoder. pg_date's sibling pg_time expects a {Hours, Minutes,
+%% Seconds} 3-tuple where Seconds is an integer for whole seconds or a float for
+%% sub-second precision. A saga Time lowers to the tagged 5-tuple
+%% {std_datetime_Time, H, Mi, S, Micro}; fold the microseconds into the seconds
+%% field, staying integer when there are none so whole seconds stay exact.
+%% pg_time rounds the float back to integer micros, so the round-trip is exact.
+encode_time({std_datetime_Time, H, Mi, S, 0}) ->
+    {H, Mi, S};
+encode_time({std_datetime_Time, H, Mi, S, Us}) ->
+    {H, Mi, S + Us / 1000000}.
+
+%% Postgres TIME decoder. pg_time gives {Hours, Minutes, Seconds} where Seconds
+%% is integer when there are no microseconds, otherwise float — the same shape
+%% the TIMESTAMPTZ tuple uses. Split the float back into whole seconds + micros.
+decode_time({H, Mi, S}) when is_integer(H), is_integer(Mi), is_integer(S) ->
+    {ok, {std_datetime_Time, H, Mi, S, 0}};
+decode_time({H, Mi, S}) when is_integer(H), is_integer(Mi), is_float(S) ->
+    IntS = trunc(S),
+    Us = trunc((S - IntS) * 1000000),
+    {ok, {std_datetime_Time, H, Mi, IntS, Us}};
+decode_time(Other) ->
+    {error, {std_dynamic_DecodeError, <<"Time">>, classify(Other), []}}.
 
 classify(V) when is_binary(V) -> <<"String">>;
 classify(V) when is_integer(V) -> <<"Int">>;

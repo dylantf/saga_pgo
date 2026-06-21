@@ -18,25 +18,6 @@ opaque type Uuid
 
 A Postgres UUID. Internally a 36-character canonical hyphenated string.
 
-## Values
-
-### naive_datetime
-
-```saga
-fun naive_datetime : Decoder NaiveDateTime
-```
-
-Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
-Both are decoded to a NaiveDateTime in UTC.
-
-### uuid
-
-```saga
-fun uuid : Decoder Uuid
-```
-
-Decoder for Postgres UUID columns.
-
 ## Functions
 
 ### pg_null
@@ -85,6 +66,23 @@ fun pg_date : Date -> Value
 
 Encode a Date as a query parameter for Postgres DATE columns.
 
+### pg_naive_datetime
+
+```saga
+fun pg_naive_datetime : NaiveDateTime -> Value
+```
+
+Encode a NaiveDateTime as a query parameter for Postgres TIMESTAMP and
+TIMESTAMPTZ columns. The value is treated as being in UTC.
+
+### pg_time
+
+```saga
+fun pg_time : Time -> Value
+```
+
+Encode a Time as a query parameter for Postgres TIME columns.
+
 ### maybe_null
 
 ```saga
@@ -99,6 +97,31 @@ maybe_null text maybe_username
 maybe_null int_value maybe_age
 maybe_null date_value maybe_birthday
 
+### naive_datetime
+
+```saga
+fun naive_datetime : Decoder NaiveDateTime
+```
+
+Decoder for Postgres TIMESTAMP and TIMESTAMPTZ columns.
+Both are decoded to a NaiveDateTime in UTC.
+
+### date
+
+```saga
+fun date : Decoder Date
+```
+
+Decoder for Postgres DATE columns.
+
+### time
+
+```saga
+fun time : Decoder Time
+```
+
+Decoder for Postgres TIME columns.
+
 ### parse_uuid
 
 ```saga
@@ -106,3 +129,12 @@ fun parse_uuid : String -> Result Uuid String
 ```
 
 Parse a string into a Uuid. Accepts canonical hyphenated form.
+
+### uuid
+
+```saga
+fun uuid : Decoder Uuid
+```
+
+Decoder for Postgres UUID columns.
+

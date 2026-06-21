@@ -21,7 +21,7 @@
     {
       "slug": "types-and-decoding",
       "title": "Types and decoding",
-      "description": "Encoding parameters with `pg_int`, `pg_text`, `pg_uuid`, `pg_date`, `maybe_null`, and decoding result columns with `uuid`, `naive_datetime`, and the `Std.Dynamic` decoders.",
+      "description": "Encoding parameters with `pg_int`, `pg_text`, `pg_uuid`, `pg_date`, `pg_time`, `pg_naive_datetime`, `maybe_null`, and decoding result columns with `uuid`, `naive_datetime`, `date`, `time`, and the `Std.Dynamic` decoders.",
       "group": "guide"
     }
   ]
