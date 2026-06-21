@@ -90,7 +90,7 @@ query conn sql params = raw_execute! conn sql params
 #@ hood, so don't let captured continuations from inside the callback escape
 #@ the boundary — re-invoking them later will run outside any transaction.
 pub fun transaction : Connection -> (Unit -> Result a QueryError needs {Postgres}) -> Result a QueryError
-  needs {Postgres, Transaction}
+  needs {Transaction}
 transaction conn f = transaction! conn f
 
 # --- Query builder ---
