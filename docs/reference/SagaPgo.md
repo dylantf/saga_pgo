@@ -47,6 +47,18 @@ record Returned a {
 }
 ```
 
+### TransactionError
+
+```saga
+type TransactionError e =
+  | TransactionFailed QueryError
+  | RolledBack e
+  deriving (Debug)
+```
+
+`TransactionFailed` means the transaction could not begin. `RolledBack` wraps
+the body error that caused an explicit or implicit rollback.
+
 ### QueryBuilder
 
 ```saga
@@ -71,7 +83,7 @@ effect Postgres {
 
 ```saga
 effect Transaction {
-  fun transaction : Connection -> Unit -> Result a QueryError needs {Postgres} -> Result a QueryError
+  fun transaction : Connection -> Unit -> Result a e needs {Postgres, Rollback e} -> Result a (TransactionError e)
 }
 ```
 
@@ -82,6 +94,18 @@ same transaction connection via pgo's process dictionary.
 
 Multi-shot continuations whose captured slice escapes the callback boundary
 are not supported and will run their re-invocations outside any transaction.
+
+### Rollback
+
+```saga
+effect Rollback e {
+  fun rollback : e -> a
+}
+```
+
+Scoped early-exit effect for transactions. `rollback! err` aborts the current
+transaction body, rolls back immediately, and returns `Err (RolledBack err)`
+from the surrounding `transaction` call.
 
 ## Handlers
 
@@ -128,15 +152,19 @@ code that wants ergonomics, prefer the builder: `sql "..." |> ... |> execute con
 ### transaction
 
 ```saga
-fun transaction : Connection -> Unit -> Result a QueryError needs {Postgres} -> Result a QueryError needs {Postgres, Transaction}
+fun transaction : Connection -> Unit -> Result a e needs {Postgres, Rollback e} -> Result a (TransactionError e) needs {Transaction}
 ```
 
 Run a callback inside a database transaction. All `Postgres` effects
 performed inside the callback against the same connection are routed to the
 transaction, and the transaction commits if the callback returns `Ok`, rolls
-back if it returns `Err`. Uses pgo's process-dictionary mechanism under the
-hood, so don't let captured continuations from inside the callback escape
-the boundary — re-invoking them later will run outside any transaction.
+back if it returns `Err`. Body errors return as `RolledBack e`; failures that
+happen before the body starts return as `TransactionFailed QueryError`.
+`rollback! err` rolls back immediately and returns `Err (RolledBack err)`.
+Uses pgo's process-dictionary
+mechanism under the hood, so don't let captured continuations from inside the
+callback escape the boundary — re-invoking them later will run outside any
+transaction.
 
 ### sql
 
@@ -211,4 +239,3 @@ fun connect : Config -> Connection
 Start a connection pool and return a `Connection` handle. Pass this to
 `query`, `execute`, and `transaction`. Multiple calls to `connect` give
 you multiple independent pools.
-

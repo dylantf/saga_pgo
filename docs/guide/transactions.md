@@ -32,11 +32,28 @@ installed when a `Postgres` handler is already available.
 
 ## Commit and rollback
 
-The callback returns `Result a QueryError`. The handler reads that
-result and:
+The callback can return any `Result a e`. The handler reads that result and:
 
 - `Ok value` — commits, then returns `Ok value` from `transaction`.
-- `Err e` — rolls back, then returns `Err e`.
+- `Err e` — rolls back, then returns `Err (RolledBack e)`.
+
+Failures that happen before the body starts, such as failing to begin the
+transaction, return `Err (TransactionFailed query_error)`.
+
+Use `rollback! e` for a scoped early exit from the transaction body:
+
+```saga
+type AppError =
+  | Validation String
+
+let result = transaction conn (fun () -> {
+  if invalid then rollback! (Validation "bad data")
+  else Ok ()
+})
+```
+
+`rollback! e` rolls back immediately, skips the rest of the body, and returns
+`Err (RolledBack e)`.
 
 Every `Postgres` operation inside the callback that uses the same
 `Connection` automatically joins this transaction. That's done via

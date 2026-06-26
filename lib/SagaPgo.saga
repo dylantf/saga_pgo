@@ -70,8 +70,27 @@ pub effect Postgres {
 #@ Multi-shot continuations whose captured slice escapes the callback boundary
 #@ are not supported and will run their re-invocations outside any transaction.
 pub effect Transaction {
-  fun transaction : Connection -> (Unit -> Result a QueryError needs {Postgres}) -> Result a QueryError
+  fun transaction : Connection
+    -> (Unit -> Result a e needs {Postgres, Rollback e})
+    -> Result a (TransactionError e)
 }
+
+#@ Scoped early-exit effect for transactions. `rollback! err` aborts the current
+#@ transaction body, rolls back immediately, and returns `Err err` from the
+#@ surrounding `transaction` call, wrapped as `RolledBack err`.
+pub effect Rollback e {
+  fun rollback : e -> a
+}
+
+pub type TransactionError e =
+  | TransactionFailed QueryError
+  | RolledBack e
+  deriving (Debug)
+
+type TransactionOutcome a e =
+  | TxOk a
+  | TxErr e
+  | TxRolledBack e
 
 # --- Convenience wrappers ---
 
@@ -89,7 +108,9 @@ query conn sql params = raw_execute! conn sql params
 #@ back if it returns `Err`. Uses pgo's process-dictionary mechanism under the
 #@ hood, so don't let captured continuations from inside the callback escape
 #@ the boundary — re-invoking them later will run outside any transaction.
-pub fun transaction : Connection -> (Unit -> Result a QueryError needs {Postgres}) -> Result a QueryError
+pub fun transaction : Connection
+  -> (Unit -> Result a e needs {Postgres, Rollback e})
+  -> Result a (TransactionError e)
   needs {Transaction}
 transaction conn f = transaction! conn f
 
@@ -254,14 +275,28 @@ pub handler pg for Postgres {
 pub handler pg_transaction for Transaction needs {Postgres} {
   transaction conn f = {
     case bridge_begin_tx conn {
-      Err e -> resume Err e
+      Err e -> resume Err (TransactionFailed e)
       Ok handle -> {
-        let result = f ()
-        let _ = case result {
-          Ok _ -> bridge_commit_tx handle
-          Err _ -> bridge_rollback_tx handle
+        let outcome = (fun () -> case f () {
+          Ok value -> TxOk value
+          Err err -> TxErr err
+        }) () with {
+          rollback err = {
+            let _ = bridge_rollback_tx handle
+            TxRolledBack err
+          }
         }
-        resume result
+        case outcome {
+          TxOk value -> {
+            let _ = bridge_commit_tx handle
+            resume Ok value
+          }
+          TxErr err -> {
+            let _ = bridge_rollback_tx handle
+            resume Err (RolledBack err)
+          }
+          TxRolledBack err -> resume Err (RolledBack err)
+        }
       }
     }
   }
